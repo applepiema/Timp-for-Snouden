@@ -1,0 +1,200 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <dirent.h>
+
+#define MAX_NAME 100
+#define MAX_LINE 256
+#define INSTALL_DIR "/tmp/fio_program"
+#define DATA_FILE INSTALL_DIR "/data.txt"
+#define USAGE_FILE INSTALL_DIR "/usage.dat"
+#define MAX_STARTS 5
+#define TIME_LIMIT 180 // 3 минуты в секундах
+
+// Структура для хранения данных об использовании
+typedef struct {
+    time_t install_time;
+    int start_count;
+    time_t first_run;
+} usage_data;
+
+// Функция для создания директории
+int create_install_dir() {
+    struct stat st = {0};
+    if (stat(INSTALL_DIR, &st) == -1) {
+        if (mkdir(INSTALL_DIR, 0700) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// Сохранение данных об использовании
+void save_usage_data(const usage_data *data) {
+    FILE *file = fopen(USAGE_FILE, "wb");
+    if (file) {
+        fwrite(data, sizeof(usage_data), 1, file);
+        fclose(file);
+    }
+}
+
+// Загрузка данных об использовании
+int load_usage_data(usage_data *data) {
+    FILE *file = fopen(USAGE_FILE, "rb");
+    if (file) {
+        fread(data, sizeof(usage_data), 1, file);
+        fclose(file);
+        return 1;
+    }
+    return 0;
+}
+
+// Проверка существования установки
+int is_installed() {
+    return access(USAGE_FILE, F_OK) == 0;
+}
+
+// Проверка лимитов
+int check_limits(int is_time_limited) {
+    usage_data data;
+    
+    if (!load_usage_data(&data)) {
+        // Первый запуск
+        data.install_time = time(NULL);
+        data.start_count = 1;
+        data.first_run = data.install_time;
+        save_usage_data(&data);
+        return 1;
+    }
+    
+    // Увеличиваем счетчик запусков
+    data.start_count++;
+    save_usage_data(&data);
+    
+    if (is_time_limited) {
+        time_t current_time = time(NULL);
+        if (current_time - data.first_run > TIME_LIMIT) {
+            printf("Достигнут лимит по времени!\n");
+            return 0;
+        }
+    } else {
+        if (data.start_count > MAX_STARTS) {
+            printf("Достигнут лимит по количеству запусков!\n");
+            return 0;
+        }
+    }
+    
+    return 1;
+}
+
+// Поиск ФИО в файле
+int find_fio(const char *fio) {
+    FILE *file = fopen(DATA_FILE, "r");
+    if (!file) return 0;
+    
+    char line[MAX_LINE];
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\n")] = 0; // Удаляем перевод строки
+        if (strcmp(line, fio) == 0) {
+            fclose(file);
+            return 1;
+        }
+    }
+    
+    fclose(file);
+    return 0;
+}
+
+// Добавление ФИО в файл
+void add_fio(const char *fio) {
+    FILE *file = fopen(DATA_FILE, "a");
+    if (file) {
+        fprintf(file, "%s\n", fio);
+        fclose(file);
+    }
+}
+
+// Деинсталляция
+void uninstall() {
+    remove(DATA_FILE);
+    remove(USAGE_FILE);
+    rmdir(INSTALL_DIR);
+    printf("Программа деинсталлирована.\n");
+}
+
+// Отображение информации о лимитах
+void show_limits(int is_time_limited) {
+    usage_data data;
+    if (load_usage_data(&data)) {
+        if (is_time_limited) {
+            time_t current_time = time(NULL);
+            int remaining = TIME_LIMIT - (current_time - data.first_run);
+            printf("Осталось времени: %d секунд\n", remaining > 0 ? remaining : 0);
+        } else {
+            printf("Количество запусков: %d/%d\n", data.start_count, MAX_STARTS);
+        }
+    }
+}
+
+int main(int argc, char *argv[]) {
+    int is_time_limited = 0;
+    
+    // Проверка аргументов командной строки
+    if (argc > 1) {
+        if (strcmp(argv[1], "--time-limit") == 0) {
+            is_time_limited = 1;
+        } else if (strcmp(argv[1], "--uninstall") == 0) {
+            uninstall();
+            return 0;
+        }
+    }
+    
+    // Создание директории установки
+    if (!create_install_dir()) {
+        printf("Ошибка создания директории установки!\n");
+        return 1;
+    }
+    
+    // Проверка предыдущей установки
+    if (is_installed()) {
+        printf("Обнаружена предыдущая установка программы.\n");
+    }
+    
+    // Проверка лимитов
+    if (!check_limits(is_time_limited)) {
+        printf("\nЛимит использования достигнут!\n");
+        printf("1. Приобрести полную версию\n");
+        printf("2. Деинсталлировать программу\n");
+        
+        int choice;
+        printf("Выберите действие: ");
+        scanf("%d", &choice);
+        
+        if (choice == 2) {
+            uninstall();
+        }
+        return 0;
+    }
+    
+    // Основная функциональность
+    char fio[MAX_NAME];
+    printf("Введите ФИО: ");
+    getchar(); // Очистка буфера
+    fgets(fio, sizeof(fio), stdin);
+    fio[strcspn(fio, "\n")] = 0; // Удаляем перевод строки
+    
+    if (find_fio(fio)) {
+        printf("Данное ФИО уже существует в базе.\n");
+    } else {
+        add_fio(fio);
+        printf("ФИО успешно добавлено.\n");
+    }
+    
+    // Показ информации о лимитах
+    show_limits(is_time_limited);
+    
+    return 0;
+}
